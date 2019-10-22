@@ -1,2 +1,2 @@
 # ReinforcementKinetics
-A repository that uses reinforcement learning to minimize combustor missions
+A repository that uses reinforcement learning to minimize combustor emissions
