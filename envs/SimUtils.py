@@ -105,7 +105,7 @@ def getStateAtTime(flame, tList, tRequired, mech='gri30.xml'):
             vitArray[i, :] = np.hstack([vel_final * dt, vel_final, vitiator.thermo.T, 0, MWi, vitiator.thermo.Y, vitiator.thermo.X, vitiator.thermo.P])
             vitRN.advance(vit_tList[i])
         vit_tList += tau_vit_start             
-        vitDF = pd.DataFrame(data=vitArray, index=vit_tList, columns=columnNames)
+        vitDF = pd.DataFrame(data=vitArray, index=vit_tList, columns=columnNames, dtype=np.float64)
         # print("Vitiator end time:", vit_tList[-1]/1e-3, "milliseconds") 
         vitiator.syncState()
         '''Call syncState so that newGas has the right state for use in later functions.'''
@@ -116,8 +116,8 @@ def getStateAtTime(flame, tList, tRequired, mech='gri30.xml'):
         # print("New mainBurnerDF length:", len(mainBurnerDF.index.values))
     else:
         mainBurnerDF = mainBurnerDF[np.array(mainBurnerDF.index > 0) & np.array(mainBurnerDF.index <= tRequired)]
-    mainBurnerDF['NOppmvd'] = correctNOx(mainBurnerDF['X_NO'], mainBurnerDF['X_H2O'], mainBurnerDF['X_O2'])
-    mainBurnerDF['COppmvd'] = correctNOx(mainBurnerDF['X_CO'], mainBurnerDF['X_H2O'], mainBurnerDF['X_O2'])    
+    mainBurnerDF['NOppmvd'] = correctNOx(mainBurnerDF['X_NO'].values, mainBurnerDF['X_H2O'].values, mainBurnerDF['X_O2'].values)
+    mainBurnerDF['COppmvd'] = correctNOx(mainBurnerDF['X_CO'].values, mainBurnerDF['X_H2O'].values, mainBurnerDF['X_O2'].values)    
     return newGas, minIndex, mainBurnerDF
 
 def runFlame(gas, slope=0.01, curve=0.01):
@@ -195,10 +195,26 @@ def solvePhi_airSplit(phiGlobal, phiMain, airSplit=1):
 
 def equil(phi, T_air = 650, T_fuel = 300, P = 25*ct.one_atm, mech="gri30.xml"): 
     gas = ct.Solution(mech);  
-    m_air = 1
-    m_fuel = phi*fs_CH4
-    mixture =  ctools.mix([ctools.air(T_air, P, mech), ctools.CH4(T_fuel, P, mech)], [m_air, m_fuel], mech, P)
+    fs_CH4 = 0.058387057492574147288255659304923028685152530670166015625
+
+    fuelGas = ct.Solution('gri30.xml')
+    fuelGas.TPX = T_fuel, P, {'CH4':1}
+    fuel = ct.Quantity(fuelGas)
+    fuel.mass = phi*fs_CH4
+
+    airGas = ct.Solution('gri30.xml')
+    airGas.TPX = T_air, P, {'N2':0.79, 'O2':0.21}
+    air = ct.Quantity(airGas)
+    air.mass = 1
+
+    fuel.constant = air.constant = 'HP'  # keep enthalpy and pressure constant
+    mixture = fuel + air  # mix at constant HP
+    mixture = mixture.phase
+
     mixture.equilibrate('HP');  
-    CO_ppmvd = ctools.correctNOx(mixture['CO'].X, mixture['H2O'].X, mixture['O2'].X) 
-    NO_ppmvd = ctools.correctNOx(mixture['NO'].X, mixture['H2O'].X, mixture['O2'].X) 
+    CO_ppmvd = correctNOx(mixture['CO'].X, mixture['H2O'].X, mixture['O2'].X) 
+    NO_ppmvd = correctNOx(mixture['NO'].X, mixture['H2O'].X, mixture['O2'].X) 
     return np.hstack([mixture.T, CO_ppmvd, NO_ppmvd]) 
+
+def create_combustor_network():
+    pass

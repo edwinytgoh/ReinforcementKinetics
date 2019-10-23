@@ -1,3 +1,5 @@
 
 *.json
 *.pyc
+*.nbc
+*.nbi
