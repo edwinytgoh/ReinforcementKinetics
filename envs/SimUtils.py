@@ -194,7 +194,7 @@ def solvePhi_airSplit(phiGlobal, phiMain, airSplit=1):
     return mfm/m_total, mam/m_total, mfs/m_total, mas/m_total
 
 def equil(phi, T_air = 650, T_fuel = 300, P = 25*ct.one_atm, mech="gri30.xml"): 
-    gas = ct.Solution(mech);  
+    gas = ct.Solution(mech)  
     fs_CH4 = 0.058387057492574147288255659304923028685152530670166015625
 
     fuelGas = ct.Solution('gri30.xml')
