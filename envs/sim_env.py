@@ -3,8 +3,7 @@ import cantera as ct
 import numpy as np
 from gym import spaces
 from gym.utils import EzPickle
-from SimUtils import solvePhi_airSplit, equil, runMainBurner, correctNOx
-
+from envs.SimUtils import solvePhi_airSplit, equil, runMainBurner, correctNOx
 milliseconds = 1e-3
 DT = 0.001*milliseconds  # this is the time step used in the simulation
 MAX_STEPS = 15*milliseconds/DT  # 15 ms total time gives max steps of 15,000
@@ -23,8 +22,15 @@ MECH = 'gri30.xml'
 # calculate total "reservoir" of each reactant stream based on equivalence ratio and air split
 # airSplit = 0.75 means 25% of the air coming from compressor is diverted into secondary stage
 M_fuel_main, M_air_main, M_fuel_sec, M_air_sec = solvePhi_airSplit(
-    PHI_GLOBAL, PHI_MAIN, airSplit=0.75)
+    PHI_GLOBAL, PHI_MAIN, airSplit=0.9)
 
+M_fuel_main *= 100
+M_air_main *= 100
+M_fuel_sec *= 100
+M_air_sec *= 100
+
+main_multiplier = 0.15
+sec_multiplier = 0.75
 
 main_burner_reactor, main_burner_df = runMainBurner(
 PHI_MAIN, TAU_MAIN, T_fuel=T_FUEL, T_ox=T_AIR, P=P, mech=MECH)
@@ -91,6 +97,7 @@ class SimEnv(gym.Env, EzPickle):
         self.dt = DT
         self.age = 0
         self.steps_taken = 0
+        self.reward = 0
         # Create main burner objects
         self.main_burner_gas = ct.Solution(MECH)
         self.main_burner_gas.TPX = main_burner_reactor.thermo.TPX
@@ -114,7 +121,7 @@ class SimEnv(gym.Env, EzPickle):
         self.sec_stage_gas = ct.Solution(MECH)
         self.sec_stage_gas.TPX = 300, P, {'AR': 1.0}
         self.sec_stage_reactor = ct.ConstPressureReactor(self.sec_stage_gas)
-        self.sec_stage_reactor.mass = 1e-6
+        self.sec_stage_reactor.volume = 1e-8
         self.network = ct.ReactorNet(
             [self.main_burner_reactor, self.sec_stage_reactor])
 
@@ -133,7 +140,13 @@ class SimEnv(gym.Env, EzPickle):
 
         # Define action and observation spaces; must be gym.spaces
         # we're controlling three things: mdot_main, mdot_fuel_sec, mdot_air_sec
-        self.action_space = spaces.Box(low=0, high=1, shape=(1, 3))
+        self.action_space = spaces.Box(
+            low=np.array([[0,0,0]]), 
+            high=np.array([[
+                main_multiplier * self.remaining_main_burner_mass, 
+                sec_multiplier * self.sec_fuel_remaining, 
+                sec_multiplier * self.sec_air_remaining]]), 
+            dtype=np.float32)
         low = np.array([0]*55 + [-np.finfo(np.float32).max]*53)
         high = np.array([3000, 10] + [1]*53 + [np.finfo(np.float64).max]*53)
         num_cols = len(self.sec_stage_gas.state) + \
@@ -170,15 +183,17 @@ class SimEnv(gym.Env, EzPickle):
         # Calculate mdots based on action input (ideally predicted by model)
         # action is a 1x3 array, so take the first row first
         action = action[0]
-        mdot_main = action[0] * self.remaining_main_burner_mass
-        mdot_fuel_sec = action[1] * self.sec_fuel_remaining
-        mdot_air_sec = action[2] * self.sec_air_remaining
+        mdot_main = action[0]/self.dt # note: need to do integral. see MassCalc.docx
+        mdot_fuel_sec = action[1]/self.dt
+        mdot_air_sec = action[2]/self.dt
+
 
         self.mfc_main.set_mass_flow_rate(mdot_main)
         self.mfc_fuel_sec.set_mass_flow_rate(mdot_fuel_sec)
         self.mfc_air_sec.set_mass_flow_rate(mdot_air_sec)
 
         # Advance the reactor network (sec_stage_reactor and main_burner_reactor) by dt
+        self.network.set_initial_time(self.age) # important!! 
         self.age += self.dt
         self.steps_taken += 1
         self.network.advance(self.age)
@@ -187,11 +202,20 @@ class SimEnv(gym.Env, EzPickle):
         # TODO: check if main burner reservoir contents are being updated
         self.main_burner_reservoir.syncState()
 
-        self.remaining_main_burner_mass -= mdot_main
-        self.sec_air_remaining -= mdot_air_sec
-        self.sec_fuel_remaining -= mdot_fuel_sec
-
-
+        self.remaining_main_burner_mass -= action[0]
+        self.sec_fuel_remaining -= action[1]
+        self.sec_air_remaining -= action[2]
+        
+        # update action space
+        #TODO: find a way to set entrainment rate based on physical limitations, i.e., can't be infinitely fast
+        self.action_space = spaces.Box(
+            low=np.array([[0,0,0]]), 
+            high=np.array([[
+                main_multiplier*self.remaining_main_burner_mass, 
+                sec_multiplier*self.sec_fuel_remaining, 
+                sec_multiplier*self.sec_air_remaining]]), 
+            dtype=np.float32)
+        
         self.observation_array = self._next_observation() # update observation array
 
         # convert NO and CO from mole fractions into volumetric ppm
@@ -213,16 +237,15 @@ class SimEnv(gym.Env, EzPickle):
         reward_T = -10*(T_distance/T_threshold)**3 + 10
         reward_NO = -5*(NO_ppmvd/25)**3 + 5
         reward_CO = -5*(CO_distance/CO_threshold)**3 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
-        reward = reward_T + reward_NO + reward_CO - 3*self.steps_taken # penalize for every extra step taken
-
+        reward = reward_T + reward_NO + reward_CO - 0.5*self.steps_taken # penalize for every extra step taken
+        self.reward = reward
         game_over = self.steps_taken > MAX_STEPS \
                     or (\
                         T_distance <= T_threshold \
-                        and np.abs(CO_distance) <= CO_threshold  
-                    ) or (
-                        self.remaining_main_burner_mass <= 1e-9 \
+                        and np.abs(CO_distance) <= CO_threshold \
+                        and self.remaining_main_burner_mass <= 1e-9 \
                         and self.sec_air_remaining <= 1e-9 \
-                        and self.sec_fuel_remaining <= 1e-9
+                        and self.sec_fuel_remaining <= 1e-9                         
                     )
         return self.observation_array, reward, game_over, {}
 
@@ -242,21 +265,31 @@ class SimEnv(gym.Env, EzPickle):
             self.sec_stage_gas.X[H2O_idx],
             self.sec_stage_gas.X[O2_idx])
 
+        T_distance = np.abs(self.sec_stage_gas.T - T_eq)
+        T_threshold = 0.15*T_eq
+
+        CO_distance = CO_ppmvd - CO_eq
+        CO_threshold = 0.25*CO_eq
+
+        reward_T = -10*(T_distance/T_threshold)**3 + 10
+        reward_NO = -5*(NO_ppmvd/25)**3 + 5
+        reward_CO = -5*(CO_distance/CO_threshold)**3 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
+        
         phi = self.sec_stage_gas.get_equivalence_ratio()
         phi_norm = phi/(1 + phi)
         T = self.sec_stage_gas.T
-
-        print(f"""
-        =============================================================
-        step_num    age (ms)    T (K)   phi_norm NO (ppmvd)  CO (ppmvd)
-        =============================================================
-        """,
-        f"{self.step_num}\t",
-        f"{self.age/milliseconds}\t",
+        if self.steps_taken == 0:
+            print(f"step\tage (ms)\tT\tphi_norm\tNO\tCO\tReward\tReward T\tReward NO\tReward CO")
+            print(f"=============================================================")
+        print(
+        f"{self.steps_taken}\t",
+        f"{self.age/milliseconds:.2f}\t",
         f"{T:.2f}\t",
         f"{phi_norm:.2f}\t",
         f"{NO_ppmvd:.2f}\t",
-        f"{CO_ppmvd:.2f}"
+        f"{CO_ppmvd:.2f}\t", 
+        f"{self.reward:.2f}\t",
+        f"{reward_T:.2f}\t{reward_NO:.2f}\t{reward_CO:.2f}"
         )        
         # return 
 
