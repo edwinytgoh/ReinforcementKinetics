@@ -248,6 +248,20 @@ class SimEnv(gym.Env, EzPickle):
         self.T_distance = 0
         self.NO_ppmvd = 0
         self.CO_distance = 0
+        
+        # Reset main burner objects
+        self.main_burner_gas = ct.Solution(MECH)
+        self.main_burner_gas.TPX = main_burner_backup_state.TPX
+        self.main_burner_reactor = ct.ConstPressureReactor(
+            self.main_burner_gas)
+        self.main_burner_reservoir = ct.Reservoir(
+            contents=self.main_burner_gas)
+        self.remaining_main_burner_mass = M_air_main + M_fuel_main
+
+        # Reset remaining fuel 
+        self.sec_fuel_remaining = M_fuel_sec
+        self.sec_air_remaining = M_air_sec
+
         return self._next_obeservation()
 
     def render(self, mode='human'):
