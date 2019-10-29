@@ -28,8 +28,8 @@ M_fuel_main, M_air_main, M_fuel_sec, M_air_sec = solvePhi_airSplit(
 
 main_burner_reactor, main_burner_df = runMainBurner(
 PHI_MAIN, TAU_MAIN, T_fuel=T_FUEL, T_ox=T_AIR, P=P, mech=MECH)
-main_burner_backup_state = ct.Solution(MECH)
-main_burner_backup_state.TPX = main_burner_reactor.thermo.TPX
+# main_burner_backup_state = ct.Solution(MECH)
+# main_burner_backup_state.TPX = main_burner_reactor.thermo.TPX
 
 NO_idx = main_burner_reactor.thermo.species_index('NO')
 CO_idx = main_burner_reactor.thermo.species_index('CO')
@@ -65,13 +65,15 @@ class SimEnv(gym.Env, EzPickle):
         - CO
         - NO
     Starting State:
-        All observations are assigned a uniform random value in [-0.05..0.05]
+        Choose final 10 rows from main burner simulation, append density and net production rates
     Episode Termination:
-        Pole Angle is more than 12 degrees
-        Cart Position is more than 2.4 (center of the cart reaches the edge of the display)
-        Episode length is greater than 200
-        Solved Requirements
-        Considered solved when the average reward is greater than or equal to 195.0 over 100 consecutive trials.
+        1. Number of steps is greater than MAX_STEPS
+            OR
+        2. Temperature is within a certain threshold of the final temperature
+            AND
+        2. CO is within a certain threshold of the equilibrium CO value 
+            OR
+        3. Remaining reactants is less than 1e-9
     """
     metadata = {'render.modes': ['human']}
 
@@ -86,7 +88,7 @@ class SimEnv(gym.Env, EzPickle):
         # gym.Env.__init__(self)
         # EzPickle.__init__(self)
 
-        self.__dt = DT
+        self.dt = DT
         self.age = 0
         self.steps_taken = 0
         # Create main burner objects
@@ -141,22 +143,25 @@ class SimEnv(gym.Env, EzPickle):
             high=np.tile(high, (10, 1)),
             dtype=np.float64)
 
-        #? set initial observation to be 0 or time history from the flame?
-        final_ten_rows = main_burner_df.iloc[-10:].copy()
-        final_ten_rows['density'] = [main_burner_reactor.thermo.state[1]]*10
-        obs_cols = ['T', 'density'] +\
-            [col for col in final_ten_rows.columns if 'X_' in col]
-        self.observation_array = np.hstack([
-            final_ten_rows.loc[:, obs_cols].values,
-            np.tile(self.main_burner_gas.net_production_rates, (10, 1)) # repmat 10 rows
-        ])
+        self.observation_array = self._next_observation(init=True)
 
-    def dt(self):
-        return self.__dt
-
-    @dt.setter
-    def dt(self, dt=0.001*milliseconds):
-        self.__dt = dt
+    def _next_observation(self, init=False):
+        if init:
+            #? set initial observation to be 0 or time history from the flame?
+            final_ten_rows = main_burner_df.iloc[-10:].copy()
+            # append density by assuming that density after the flame is constant
+            final_ten_rows['density'] = [main_burner_reactor.thermo.state[1]]*10
+            obs_cols = ['T', 'density'] + [col for col in final_ten_rows.columns if 'X_' in col]
+            return np.hstack([
+                final_ten_rows.loc[:, obs_cols].values,
+                np.tile(self.main_burner_gas.net_production_rates, (10, 1)) # repmat 10 rows
+            ])        
+        else:
+            # get observations and calculate rewards by stacking last 9 observations on top of current observation
+            return np.vstack((
+                self.observation_array[1:],
+                np.hstack([self.sec_stage_gas.state, self.sec_stage_gas.net_production_rates])
+            ))            
 
     def step(self, action):
         assert self.action_space.contains(
@@ -186,16 +191,14 @@ class SimEnv(gym.Env, EzPickle):
         self.sec_air_remaining -= mdot_air_sec
         self.sec_fuel_remaining -= mdot_fuel_sec
 
-        # get observations and calculate rewards
-        self.observation_array = np.vstack((
-            self.observation_array[1:],
-            np.hstack([self.sec_stage_gas.state, self.sec_stage_gas.net_production_rates])
-        )) # stack last 9 observations on top of current observation
 
+        self.observation_array = self._next_observation() # update observation array
+
+        # convert NO and CO from mole fractions into volumetric ppm
         NO_ppmvd = correctNOx(
             self.sec_stage_gas.X[NO_idx],
             self.sec_stage_gas.X[H2O_idx],
-            self.sec_stage_gas.X[O2_idx])
+            self.sec_stage_gas.X[O2_idx]) 
         
         CO_ppmvd = correctNOx(
             self.sec_stage_gas.X[CO_idx],
@@ -224,32 +227,38 @@ class SimEnv(gym.Env, EzPickle):
         return self.observation_array, reward, game_over, {}
 
     def reset(self):
-        # reset input variables: mdot_main, mdot_fuel_sec, mdot_air_sec
-        # reset output variables: T_distance, NO_ppmvd, CO_distance
-        self.mdot_main = 0
-        self.mdot_fuel_sec = 0
-        self.mdot_air_sec = 0
-        self.T_distance = 0
-        self.NO_ppmvd = 0
-        self.CO_distance = 0
-        
-        # Reset main burner objects
-        self.main_burner_gas = ct.Solution(MECH)
-        self.main_burner_gas.TPX = main_burner_backup_state.TPX
-        self.main_burner_reactor = ct.ConstPressureReactor(
-            self.main_burner_gas)
-        self.main_burner_reservoir = ct.Reservoir(
-            contents=self.main_burner_gas)
-        self.remaining_main_burner_mass = M_air_main + M_fuel_main
-
-        # Reset remaining fuel 
-        self.sec_fuel_remaining = M_fuel_sec
-        self.sec_air_remaining = M_air_sec
-
-        return self._next_obeservation()
+        self.__init__() # nuclear option: possibly slower but safe 
+        return self._next_observation(init=True)
 
     def render(self, mode='human'):
-        return
+        # convert NO and CO from mole fractions into volumetric ppm
+        NO_ppmvd = correctNOx(
+            self.sec_stage_gas.X[NO_idx],
+            self.sec_stage_gas.X[H2O_idx],
+            self.sec_stage_gas.X[O2_idx]) 
+        
+        CO_ppmvd = correctNOx(
+            self.sec_stage_gas.X[CO_idx],
+            self.sec_stage_gas.X[H2O_idx],
+            self.sec_stage_gas.X[O2_idx])
+
+        phi = self.sec_stage_gas.get_equivalence_ratio()
+        phi_norm = phi/(1 + phi)
+        T = self.sec_stage_gas.T
+
+        print(f"""
+        =============================================================
+        step_num    age (ms)    T (K)   phi_norm NO (ppmvd)  CO (ppmvd)
+        =============================================================
+        """,
+        f"{self.step_num}\t",
+        f"{self.age/milliseconds}\t",
+        f"{T:.2f}\t",
+        f"{phi_norm:.2f}\t",
+        f"{NO_ppmvd:.2f}\t",
+        f"{CO_ppmvd:.2f}"
+        )        
+        # return 
 
     def close(self):
         return
