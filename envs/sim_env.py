@@ -28,6 +28,8 @@ M_fuel_main, M_air_main, M_fuel_sec, M_air_sec = solvePhi_airSplit(
 
 main_burner_reactor, main_burner_df = runMainBurner(
 PHI_MAIN, TAU_MAIN, T_fuel=T_FUEL, T_ox=T_AIR, P=P, mech=MECH)
+main_burner_backup_state = ct.Solution(MECH)
+main_burner_backup_state.TPX = main_burner_reactor.thermo.TPX
 
 NO_idx = main_burner_reactor.thermo.species_index('NO')
 CO_idx = main_burner_reactor.thermo.species_index('CO')
@@ -238,7 +240,15 @@ class SimEnv(gym.Env, EzPickle):
         return self.observation_array, reward, game_over, {}
 
     def reset(self):
-        return
+        # reset input variables: mdot_main, mdot_fuel_sec, mdot_air_sec
+        # reset output variables: T_distance, NO_ppmvd, CO_distance
+        self.mdot_main = 0
+        self.mdot_fuel_sec = 0
+        self.mdot_air_sec = 0
+        self.T_distance = 0
+        self.NO_ppmvd = 0
+        self.CO_distance = 0
+        return self._next_obeservation()
 
     def render(self, mode='human'):
         return
