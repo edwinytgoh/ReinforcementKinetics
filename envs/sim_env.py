@@ -158,22 +158,6 @@ class SimEnv(gym.Env, EzPickle):
     def dt(self, dt=0.001*milliseconds):
         self.__dt = dt
 
-    def _get_observation(self):
-        """Function that UPDATES and returns self.observation_array with current state
-        
-        WARNING: ONLY CALL THIS FUNCTION FROM WITHIN THE SELF.STEP FUNCTION! 
-        Returns:
-            self.observation_array [np.array] -- 10 x 2(n+1) array containinng previous 10 observations
-        """
-        # TODO: see which one performs better, copying the array in np.roll at each timestep, or creating a large array with MAX_STEPS rows
-        # (sc)roll previous observation array up by one row so we can replace the earliest observation with the latest observation
-        # self.observation_array = np.roll(self.observation_array, -1, axis=0)
-        self.observation_array = np.vstack((
-            self.observation_array[1:],
-            np.hstack([self.sec_stage_gas.state, self.sec_stage_gas.net_production_rates])
-        )) # stack last 9 observations on top of current observation
-        return self.observation_array
-
     def step(self, action):
         assert self.action_space.contains(
             action), "%r (%s) invalid" % (action, type(action))
