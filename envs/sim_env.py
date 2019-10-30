@@ -6,7 +6,7 @@ from gym.utils import EzPickle
 from envs.SimUtils import solvePhi_airSplit, equil, runMainBurner, correctNOx
 milliseconds = 1e-3
 DT = 0.001*milliseconds  # this is the time step used in the simulation
-MAX_STEPS = 15*milliseconds/DT  # 15 ms total time gives max steps of 15,000
+MAX_STEPS = 16*milliseconds/DT  # 15 ms total time gives max steps of 15,000
 TAU_MAIN = 15 * milliseconds  # constant main burner stage length
 PHI_MAIN = 0.3719  # i.e., m_fuel/m_air = 0.3719 * stoichiometric fuel-air-ratio
 PHI_GLOBAL = 0.635  # for 1975 K final temperature
@@ -29,8 +29,8 @@ M_air_main *= 100
 M_fuel_sec *= 100
 M_air_sec *= 100
 
-main_multiplier = 0.15
-sec_multiplier = 0.75
+tau_ent_main = 5 * milliseconds
+tau_ent_sec = 1 * milliseconds
 
 main_burner_reactor, main_burner_df = runMainBurner(
 PHI_MAIN, TAU_MAIN, T_fuel=T_FUEL, T_ox=T_AIR, P=P, mech=MECH)
@@ -143,9 +143,9 @@ class SimEnv(gym.Env, EzPickle):
         self.action_space = spaces.Box(
             low=np.array([[0,0,0]]), 
             high=np.array([[
-                main_multiplier * self.remaining_main_burner_mass, 
-                sec_multiplier * self.sec_fuel_remaining, 
-                sec_multiplier * self.sec_air_remaining]]), 
+                self.remaining_main_burner_mass/tau_ent_main, 
+                self.sec_fuel_remaining/tau_ent_sec, 
+                self.sec_air_remaining/tau_ent_sec]]), 
             dtype=np.float32)
         low = np.array([0]*55 + [-np.finfo(np.float32).max]*53)
         high = np.array([3000, 10] + [1]*53 + [np.finfo(np.float64).max]*53)
@@ -183,9 +183,9 @@ class SimEnv(gym.Env, EzPickle):
         # Calculate mdots based on action input (ideally predicted by model)
         # action is a 1x3 array, so take the first row first
         action = action[0]
-        mdot_main = action[0]/self.dt # note: need to do integral. see MassCalc.docx
-        mdot_fuel_sec = action[1]/self.dt
-        mdot_air_sec = action[2]/self.dt
+        mdot_main = action[0] 
+        mdot_fuel_sec = action[1]
+        mdot_air_sec = action[2]
 
 
         self.mfc_main.set_mass_flow_rate(mdot_main)
@@ -202,18 +202,18 @@ class SimEnv(gym.Env, EzPickle):
         # TODO: check if main burner reservoir contents are being updated
         self.main_burner_reservoir.syncState()
 
-        self.remaining_main_burner_mass -= action[0]
-        self.sec_fuel_remaining -= action[1]
-        self.sec_air_remaining -= action[2]
-        
+        self.remaining_main_burner_mass -= action[0] * self.dt
+        self.sec_fuel_remaining -= action[1] * self.dt
+        self.sec_air_remaining -= action[2] * self.dt
+
         # update action space
         #TODO: find a way to set entrainment rate based on physical limitations, i.e., can't be infinitely fast
         self.action_space = spaces.Box(
             low=np.array([[0,0,0]]), 
             high=np.array([[
-                main_multiplier*self.remaining_main_burner_mass, 
-                sec_multiplier*self.sec_fuel_remaining, 
-                sec_multiplier*self.sec_air_remaining]]), 
+                self.remaining_main_burner_mass/tau_ent_main, 
+                self.sec_fuel_remaining/tau_ent_sec, 
+                self.sec_air_remaining/tau_ent_sec]]), 
             dtype=np.float32)
         
         self.observation_array = self._next_observation() # update observation array
@@ -237,7 +237,7 @@ class SimEnv(gym.Env, EzPickle):
         reward_T = -10*(T_distance/T_threshold)**3 + 10
         reward_NO = -5*(NO_ppmvd/25)**3 + 5
         reward_CO = -5*(CO_distance/CO_threshold)**3 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
-        reward = reward_T + reward_NO + reward_CO - 0.5*self.steps_taken # penalize for every extra step taken
+        reward = reward_T + reward_NO + reward_CO - self.age/milliseconds # penalize for long times
         self.reward = reward
         game_over = self.steps_taken > MAX_STEPS \
                     or (\
