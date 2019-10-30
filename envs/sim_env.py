@@ -141,11 +141,11 @@ class SimEnv(gym.Env, EzPickle):
         # Define action and observation spaces; must be gym.spaces
         # we're controlling three things: mdot_main, mdot_fuel_sec, mdot_air_sec
         self.action_space = spaces.Box(
-            low=np.array([[0,0,0]]), 
-            high=np.array([[
+            low=np.array([0,0,0]), 
+            high=np.array([
                 self.remaining_main_burner_mass/tau_ent_main, 
                 self.sec_fuel_remaining/tau_ent_sec, 
-                self.sec_air_remaining/tau_ent_sec]]), 
+                self.sec_air_remaining/tau_ent_sec]), 
             dtype=np.float32)
         low = np.array([0]*55 + [-np.finfo(np.float32).max]*53)
         high = np.array([3000, 10] + [1]*53 + [np.finfo(np.float64).max]*53)
@@ -182,7 +182,6 @@ class SimEnv(gym.Env, EzPickle):
 
         # Calculate mdots based on action input (ideally predicted by model)
         # action is a 1x3 array, so take the first row first
-        action = action[0]
         mdot_main = action[0] 
         mdot_fuel_sec = action[1]
         mdot_air_sec = action[2]
@@ -209,11 +208,11 @@ class SimEnv(gym.Env, EzPickle):
         # update action space
         #TODO: find a way to set entrainment rate based on physical limitations, i.e., can't be infinitely fast
         self.action_space = spaces.Box(
-            low=np.array([[0,0,0]]), 
-            high=np.array([[
+            low=np.array([0,0,0]), 
+            high=np.array([
                 self.remaining_main_burner_mass/tau_ent_main, 
                 self.sec_fuel_remaining/tau_ent_sec, 
-                self.sec_air_remaining/tau_ent_sec]]), 
+                self.sec_air_remaining/tau_ent_sec]), 
             dtype=np.float32)
         
         self.observation_array = self._next_observation() # update observation array
