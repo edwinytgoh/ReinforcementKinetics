@@ -1,0 +1,70 @@
+Timer unit: 1e-07 s
+
+Total time: 0.0029591 s
+File: X:\Dropbox (GaTech)\DOE\ReinforcementKinetics\envs\sim_env.py
+Function: step at line 165
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+   165                                               def step(self, action):
+   166         1         39.0     39.0      0.1          assert self.action_space.contains(
+   167         1        690.0    690.0      2.3              action), "%r (%s) invalid" % (action, type(action))
+   168                                           
+   169                                                   # Calculate mdots based on action input (ideally predicted by model)
+   170                                                   # action is a 1x3 array, so take the first row first
+   171         1         13.0     13.0      0.0          action = action[0]
+   172         1         18.0     18.0      0.1          mdot_main = action[0] * self.remaining_main_burner_mass
+   173         1         12.0     12.0      0.0          mdot_fuel_sec = action[1] * self.sec_fuel_remaining
+   174         1         11.0     11.0      0.0          mdot_air_sec = action[2] * self.sec_air_remaining
+   175                                           
+   176         1         87.0     87.0      0.3          self.mfc_main.set_mass_flow_rate(mdot_main)
+   177         1         27.0     27.0      0.1          self.mfc_fuel_sec.set_mass_flow_rate(mdot_fuel_sec)
+   178         1         23.0     23.0      0.1          self.mfc_air_sec.set_mass_flow_rate(mdot_air_sec)
+   179                                           
+   180                                                   # Advance the reactor network (sec_stage_reactor and main_burner_reactor) by dt
+   181         1         19.0     19.0      0.1          self.age += self.dt
+   182         1         13.0     13.0      0.0          self.steps_taken += 1
+   183         1      27196.0  27196.0     91.9          self.network.advance(self.age)
+   184                                           
+   185                                                   # sync the main burner reservoir state to match the updated main burner reactor
+   186                                                   # TODO: check if main burner reservoir contents are being updated
+   187         1         34.0     34.0      0.1          self.main_burner_reservoir.syncState()
+   188                                           
+   189         1         15.0     15.0      0.1          self.remaining_main_burner_mass -= mdot_main
+   190         1         11.0     11.0      0.0          self.sec_air_remaining -= mdot_air_sec
+   191         1         10.0     10.0      0.0          self.sec_fuel_remaining -= mdot_fuel_sec
+   192                                           
+   193                                           
+   194         1        711.0    711.0      2.4          self.observation_array = self._next_observation() # update observation array
+   195                                           
+   196                                                   # convert NO and CO from mole fractions into volumetric ppm
+   197         1         14.0     14.0      0.0          NO_ppmvd = correctNOx(
+   198         1         63.0     63.0      0.2              self.sec_stage_gas.X[NO_idx],
+   199         1         34.0     34.0      0.1              self.sec_stage_gas.X[H2O_idx],
+   200         1         89.0     89.0      0.3              self.sec_stage_gas.X[O2_idx]) 
+   201                                                   
+   202         1         10.0     10.0      0.0          CO_ppmvd = correctNOx(
+   203         1         33.0     33.0      0.1              self.sec_stage_gas.X[CO_idx],
+   204         1         30.0     30.0      0.1              self.sec_stage_gas.X[H2O_idx],
+   205         1         38.0     38.0      0.1              self.sec_stage_gas.X[O2_idx])
+   206                                                   
+   207         1         93.0     93.0      0.3          T_distance = np.abs(self.sec_stage_gas.T - T_eq)
+   208         1         14.0     14.0      0.0          T_threshold = 0.15*T_eq
+   209                                           
+   210         1         11.0     11.0      0.0          CO_distance = CO_ppmvd - CO_eq
+   211         1         11.0     11.0      0.0          CO_threshold = 0.25*CO_eq
+   212         1         97.0     97.0      0.3          reward_T = -10*(T_distance/T_threshold)**3 + 10
+   213         1         23.0     23.0      0.1          reward_NO = -5*(NO_ppmvd/25)**3 + 5
+   214         1         27.0     27.0      0.1          reward_CO = -5*(CO_distance/CO_threshold)**3 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
+   215         1         23.0     23.0      0.1          reward = reward_T + reward_NO + reward_CO - 3*self.steps_taken # penalize for every extra step taken
+   216                                           
+   217         1         15.0     15.0      0.1          game_over = self.steps_taken > MAX_STEPS \
+   218                                                               or (\
+   219         1         13.0     13.0      0.0                          T_distance <= T_threshold \
+   220                                                                   and np.abs(CO_distance) <= CO_threshold  
+   221                                                               ) or (
+   222         1         12.0     12.0      0.0                          self.remaining_main_burner_mass <= 1e-9 \
+   223                                                                   and self.sec_air_remaining <= 1e-9 \
+   224                                                                   and self.sec_fuel_remaining <= 1e-9
+   225                                                               )
+   226         1         12.0     12.0      0.0          return self.observation_array, reward, game_over, {}

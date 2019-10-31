@@ -1,0 +1,74 @@
+Timer unit: 1e-07 s
+
+Total time: 0.648848 s
+File: X:\Dropbox (GaTech)\DOE\ReinforcementKinetics\envs\sim_env.py
+Function: __init__ at line 80
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    80                                               def __init__(self):
+    81                                                   """Constructor for the SimEnv class. Call SimEnv(...) to create a SimEnv object.
+    82                                           
+    83                                                   Arguments:
+    84                                                       args {[type]} -- [description]
+    85                                                   """
+    86                                           
+    87                                                   # super(SimEnv) returns the superclass, in this case gym.Env. Construct a gym.Env instance
+    88                                                   # gym.Env.__init__(self)
+    89                                                   # EzPickle.__init__(self)
+    90                                           
+    91         1         25.0     25.0      0.0          self.dt = DT
+    92         1         17.0     17.0      0.0          self.age = 0
+    93         1         13.0     13.0      0.0          self.steps_taken = 0
+    94                                                   # Create main burner objects
+    95         1    1599773.0 1599773.0     24.7          self.main_burner_gas = ct.Solution(MECH)
+    96         1        378.0    378.0      0.0          self.main_burner_gas.TPX = main_burner_reactor.thermo.TPX
+    97         1         20.0     20.0      0.0          self.main_burner_reactor = ct.ConstPressureReactor(
+    98         1        286.0    286.0      0.0              self.main_burner_gas)
+    99         1         16.0     16.0      0.0          self.main_burner_reservoir = ct.Reservoir(
+   100         1         76.0     76.0      0.0              contents=self.main_burner_gas)
+   101         1         28.0     28.0      0.0          self.remaining_main_burner_mass = M_air_main + M_fuel_main
+   102                                           
+   103                                                   # Create secondary stage objects
+   104         1    1612091.0 1612091.0     24.8          self.sec_fuel = ct.Solution(MECH)
+   105         1        143.0    143.0      0.0          self.sec_fuel.TPX = T_FUEL, P, {'CH4': 1.0}
+   106         1        236.0    236.0      0.0          self.sec_fuel_reservoir = ct.Reservoir(contents=self.sec_fuel)
+   107         1         16.0     16.0      0.0          self.sec_fuel_remaining = M_fuel_sec
+   108         1    1624146.0 1624146.0     25.0          self.sec_air = ct.Solution(MECH)
+   109         1        155.0    155.0      0.0          self.sec_air.TPX = T_AIR, P, {'N2': 0.79, 'O2': 0.21}
+   110         1        225.0    225.0      0.0          self.sec_air_reservoir = ct.Reservoir(contents=self.sec_air)
+   111         1         17.0     17.0      0.0          self.sec_air_remaining = M_air_sec
+   112                                           
+   113                                                   # Create simulation network model
+   114         1    1614692.0 1614692.0     24.9          self.sec_stage_gas = ct.Solution(MECH)
+   115         1        157.0    157.0      0.0          self.sec_stage_gas.TPX = 300, P, {'AR': 1.0}
+   116         1        339.0    339.0      0.0          self.sec_stage_reactor = ct.ConstPressureReactor(self.sec_stage_gas)
+   117         1         15.0     15.0      0.0          self.network = ct.ReactorNet(
+   118         1        137.0    137.0      0.0              [self.main_burner_reactor, self.sec_stage_reactor])
+   119                                           
+   120                                                   # Create main and secondary mass flow controllers and connect them to the secondary stage
+   121         1         15.0     15.0      0.0          self.mfc_main = ct.MassFlowController(
+   122         1        483.0    483.0      0.0              self.main_burner_reservoir, self.sec_stage_reactor)
+   123         1         53.0     53.0      0.0          self.mfc_main.set_mass_flow_rate(0)
+   124                                           
+   125         1         13.0     13.0      0.0          self.mfc_air_sec = ct.MassFlowController(
+   126         1        401.0    401.0      0.0              self.sec_air_reservoir, self.sec_stage_reactor)
+   127         1         26.0     26.0      0.0          self.mfc_air_sec.set_mass_flow_rate(0)
+   128                                           
+   129         1         12.0     12.0      0.0          self.mfc_fuel_sec = ct.MassFlowController(
+   130         1        385.0    385.0      0.0              self.sec_fuel_reservoir, self.sec_stage_reactor)
+   131         1         25.0     25.0      0.0          self.mfc_fuel_sec.set_mass_flow_rate(0)
+   132                                           
+   133                                                   # Define action and observation spaces; must be gym.spaces
+   134                                                   # we're controlling three things: mdot_main, mdot_fuel_sec, mdot_air_sec
+   135         1       3297.0   3297.0      0.1          self.action_space = spaces.Box(low=0, high=1, shape=(1, 3))
+   136         1        234.0    234.0      0.0          low = np.array([0]*55 + [-np.finfo(np.float32).max]*53)
+   137         1        143.0    143.0      0.0          high = np.array([3000, 10] + [1]*53 + [np.finfo(np.float64).max]*53)
+   138         1         89.0     89.0      0.0          num_cols = len(self.sec_stage_gas.state) + \
+   139         1        261.0    261.0      0.0              len(self.sec_stage_gas.net_production_rates)
+   140         1         15.0     15.0      0.0          self.observation_space = spaces.Box(
+   141         1        292.0    292.0      0.0              low=np.tile(low, (10, 1)),
+   142         1        191.0    191.0      0.0              high=np.tile(high, (10, 1)),
+   143         1       2162.0   2162.0      0.0              dtype=np.float64)
+   144                                           
+   145         1      27387.0  27387.0      0.4          self.observation_array = self._next_observation(init=True)
