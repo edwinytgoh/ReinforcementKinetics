@@ -229,14 +229,16 @@ class SimEnv(gym.Env, EzPickle):
             self.sec_stage_gas.X[O2_idx])
         
         T_distance = np.abs(self.sec_stage_gas.T - T_eq)
-        T_threshold = 0.15*T_eq
+        T_threshold = 0.15*T_eq # not sure if 15% is necessary
+        
+        # if temperature is low, don't reward 
 
         CO_distance = CO_ppmvd - CO_eq
         CO_threshold = 0.25*CO_eq
         reward_T = -10*(T_distance/T_threshold)**3 + 10
         reward_NO = -5*(NO_ppmvd/25)**3 + 5
         reward_CO = -5*(CO_distance/CO_threshold)**3 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
-        reward = reward_T + reward_NO + reward_CO - self.age/milliseconds # penalize for long times
+        reward = reward_T + reward_NO + reward_CO - 10*self.age/milliseconds # penalize for long times
         self.reward = reward
         game_over = self.steps_taken > MAX_STEPS \
                     or (\
