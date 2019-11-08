@@ -157,6 +157,11 @@ class SimEnv(gym.Env, EzPickle):
             dtype=np.float64)
 
         self.observation_array = self._next_observation(init=True)
+        
+        # Reward variables for T, NO, and CO
+        self.reward_T = 0
+        self.reward_NO = 0 
+        self.reward_CO = 0
 
     def _next_observation(self, init=False):
         if init:
@@ -235,11 +240,10 @@ class SimEnv(gym.Env, EzPickle):
 
         CO_distance = CO_ppmvd - CO_eq
         CO_threshold = 0.25*CO_eq
-        reward_T = -10*(T_distance/T_threshold)**3 + 10
-        reward_NO = -5*(NO_ppmvd/25)**3 + 5
-        reward_CO = -5*(CO_distance/CO_threshold)**3 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
-        reward = reward_T + reward_NO + reward_CO - 10*self.age/milliseconds # penalize for long times
-        self.reward = reward
+        self.reward_T = -100*np.exp(T_distance/T_threshold) + 100
+        self.reward_NO = -5*(NO_ppmvd/25)**3 + 5
+        self.reward_CO = -5*(CO_distance/CO_threshold)**3 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
+        self.reward = self.reward_T + self.reward_NO + self.reward_CO - 10*self.age/milliseconds # penalize for long times
         game_over = self.steps_taken > MAX_STEPS \
                     or (\
                         T_distance <= T_threshold \
@@ -248,7 +252,7 @@ class SimEnv(gym.Env, EzPickle):
                         and self.sec_air_remaining <= 1e-9 \
                         and self.sec_fuel_remaining <= 1e-9                         
                     )
-        return self.observation_array, reward, game_over, {}
+        return self.observation_array, self.reward, game_over, {}
 
     def reset(self):
         self.__init__() # nuclear option: possibly slower but safe 
@@ -266,32 +270,28 @@ class SimEnv(gym.Env, EzPickle):
             self.sec_stage_gas.X[H2O_idx],
             self.sec_stage_gas.X[O2_idx])
 
-        T_distance = np.abs(self.sec_stage_gas.T - T_eq)
-        T_threshold = 0.15*T_eq
-
-        CO_distance = np.abs(CO_ppmvd - CO_eq)
-        CO_threshold = 0.25*CO_eq
-
-        reward_T = -20*(T_distance/T_threshold)**3 + 20
-        reward_NO = -5*(NO_ppmvd/25)**3 + 5
-        reward_CO = -5*(CO_distance/CO_threshold)**3 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
-        
         phi = self.sec_stage_gas.get_equivalence_ratio()
         phi_norm = phi/(1 + phi)
         T = self.sec_stage_gas.T
-        if self.steps_taken == 0:
-            print(f"step\tage (ms)\tT\tphi_norm\tNO\tCO\tReward\tReward T\tReward NO\tReward CO")
+        if self.steps_taken < 2:
+            print(f"step|age_(ms)|T|phi_norm|NO|CO|Rem_Main|Rem_SecFuel|Rem_SecAir|Mdot_Main|Mdot_SecFuel|Mdot_SecAir|Reward|Reward_T|Reward_NO|Reward_CO")
             print(f"=============================================================")
         print(
-        f"{self.steps_taken}\t",
-        f"{self.age/milliseconds:.2f}\t",
-        f"{T:.2f}\t",
-        f"{phi_norm:.2f}\t",
-        f"{NO_ppmvd:.2f}\t",
-        f"{CO_ppmvd:.2f}\t", 
-        f"{self.reward:.2f}\t",
-        f"{reward_T:.2f}\t{reward_NO:.2f}\t{reward_CO:.2f}"
-        )        
+            f"{self.steps_taken}|",
+            f"{self.age/milliseconds:.2f}|",
+            f"{T:.2f}|",
+            f"{phi_norm:.2f}|",
+            f"{NO_ppmvd:.2f}|",
+            f"{CO_ppmvd:.2f}|", 
+            f"{self.remaining_main_burner_mass:.2f}|",
+            f"{self.sec_fuel_remaining:.2f}|",
+            f"{self.sec_air_remaining:.2f}|",
+            f"{self.mfc_main.mdot(0):.2f}|",
+            f"{self.mfc_fuel_sec.mdot(0):.2f}|",
+            f"{self.mfc_air_sec.mdot(0):.2f}|",            
+            f"{self.reward:.2f}|",
+            f"{self.reward_T:.2f}|{self.reward_NO:.2f}|{self.reward_CO:.2f}"
+        )              
         # return 
 
     def close(self):
