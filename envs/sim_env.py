@@ -34,6 +34,7 @@ tau_ent_sec = 1 * milliseconds
 
 main_burner_reactor, main_burner_df = runMainBurner(
 PHI_MAIN, TAU_MAIN, T_fuel=T_FUEL, T_ox=T_AIR, P=P, mech=MECH)
+delta_T = T_eq - main_burner_reactor.thermo.T
 # main_burner_backup_state = ct.Solution(MECH)
 # main_burner_backup_state.TPX = main_burner_reactor.thermo.TPX
 
@@ -181,6 +182,39 @@ class SimEnv(gym.Env, EzPickle):
                 np.hstack([self.sec_stage_gas.state, self.sec_stage_gas.net_production_rates])
             ))            
 
+    def calculate_reward(self):
+        # penalise SUPER HEAVILY is didn't use up all reactants within 16 ms
+        if self.steps_taken == MAX_STEPS: 
+            self.reward = np.finfo(np.float64).min
+            return self.reward
+        else:
+            # convert NO and CO from mole fractions into volumetric ppm
+            NO_ppmvd = correctNOx(
+                self.sec_stage_gas.X[NO_idx],
+                self.sec_stage_gas.X[H2O_idx],
+                self.sec_stage_gas.X[O2_idx]) 
+            
+            CO_ppmvd = correctNOx(
+                self.sec_stage_gas.X[CO_idx],
+                self.sec_stage_gas.X[H2O_idx],
+                self.sec_stage_gas.X[O2_idx])
+            
+            # Temperature reward
+            T = self.sec_stage_gas.T
+#             if T < 0.5 * delta_T: 
+
+            T_distance = np.abs(T - T_eq)
+            T_threshold = 0.20*T_eq # not sure if 15% is necessary
+            
+            # if temperature is low, don't reward 
+
+            CO_distance = CO_ppmvd - CO_eq
+            CO_threshold = 0.25*CO_eq
+            self.reward_T = np.exp(-100*(T_distance/T_threshold) + 100)
+            self.reward_NO = -15*(NO_ppmvd/25)**3 + 15
+            self.reward_CO = -5*(CO_distance/CO_threshold)**2 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
+            self.reward = self.reward_T + self.reward_NO + self.reward_CO - 10*self.age/milliseconds # penalize for long times        
+
     def step(self, action):
         assert self.action_space.contains(
             action), "%r (%s) invalid" % (action, type(action))
@@ -222,28 +256,8 @@ class SimEnv(gym.Env, EzPickle):
         
         self.observation_array = self._next_observation() # update observation array
 
-        # convert NO and CO from mole fractions into volumetric ppm
-        NO_ppmvd = correctNOx(
-            self.sec_stage_gas.X[NO_idx],
-            self.sec_stage_gas.X[H2O_idx],
-            self.sec_stage_gas.X[O2_idx]) 
-        
-        CO_ppmvd = correctNOx(
-            self.sec_stage_gas.X[CO_idx],
-            self.sec_stage_gas.X[H2O_idx],
-            self.sec_stage_gas.X[O2_idx])
-        
-        T_distance = np.abs(self.sec_stage_gas.T - T_eq)
-        T_threshold = 0.15*T_eq # not sure if 15% is necessary
-        
-        # if temperature is low, don't reward 
+        self.calculate_reward()
 
-        CO_distance = CO_ppmvd - CO_eq
-        CO_threshold = 0.25*CO_eq
-        self.reward_T = -100*np.exp(T_distance/T_threshold) + 100
-        self.reward_NO = -5*(NO_ppmvd/25)**3 + 5
-        self.reward_CO = -5*(CO_distance/CO_threshold)**3 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
-        self.reward = self.reward_T + self.reward_NO + self.reward_CO - 10*self.age/milliseconds # penalize for long times
         game_over = self.steps_taken > MAX_STEPS \
                     or (\
                         T_distance <= T_threshold \
