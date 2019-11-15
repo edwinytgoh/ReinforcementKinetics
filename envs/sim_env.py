@@ -4,10 +4,12 @@ import numpy as np
 from gym import spaces
 from gym.utils import EzPickle
 from envs.SimUtils import solvePhi_airSplit, equil, runMainBurner, correctNOx
+
 milliseconds = 1e-3
 DT = 0.001*milliseconds  # this is the time step used in the simulation
 MAX_STEPS = 16*milliseconds/DT  # 15 ms total time gives max steps of 15,000
-TAU_MAIN = 15 * milliseconds  # constant main burner stage length
+TAU_MAIN = 15 * milliseconds  # constant main burner length
+# definition: phi = (m_fuel/m_air)/(m_fuel/m_air)_stoich; phi > 1 means excess fuel; < 1 means excess air
 PHI_MAIN = 0.3719  # i.e., m_fuel/m_air = 0.3719 * stoichiometric fuel-air-ratio
 PHI_GLOBAL = 0.635  # for 1975 K final temperature
 T_eq, CO_eq, NO_eq = equil(PHI_GLOBAL)
@@ -16,7 +18,7 @@ T_FUEL = 300
 T_AIR = 650
 P = 25*101325
 # chemical mechanism containing kinetic rates and thermodynamic properties
-MECH = 'gri30.xml'
+MECH = 'gri30.xml' # GRI-MECH 3.0 contains 53 species and 325 reactions, and is optimized for NOx production rates
 
 
 # calculate total "reservoir" of each reactant stream based on equivalence ratio and air split
@@ -34,8 +36,7 @@ tau_ent_sec = 1 * milliseconds
 
 main_burner_reactor, main_burner_df = runMainBurner(
 PHI_MAIN, TAU_MAIN, T_fuel=T_FUEL, T_ox=T_AIR, P=P, mech=MECH)
-# main_burner_backup_state = ct.Solution(MECH)
-# main_burner_backup_state.TPX = main_burner_reactor.thermo.TPX
+delta_T = T_eq - main_burner_reactor.thermo.T
 
 NO_idx = main_burner_reactor.thermo.species_index('NO')
 CO_idx = main_burner_reactor.thermo.species_index('CO')
@@ -45,41 +46,52 @@ H2O_idx = main_burner_reactor.thermo.species_index('H2O')
 
 class SimEnv(gym.Env, EzPickle):
     """
-    Description:
-        Three streams are entering a constant pressure reactor at variable rates. The goal is to control the flow rates so that a target temperature is achieved while NO and CO are minimized.
+    Description
+    -----------
+    Three streams are entering a constant pressure reactor at variable rates. The goal is to control the flow rates so that a target temperature is achieved while NO and CO are minimized.
 
-    Observation:
-        Type: Box(2(n+1), 5) where n is the number of species
-        Num	        Observation                 Min         Max
-        ---         ----------------            ---         ----
-        0	        Temperature (K)             0           3000
-        1	        Density (kg/m3)             0           10
-        2-n+1	    Mole fractions              0           1
-        n+2-2n+1	Net production rates        -Inf        Inf
+    Observation
+    -----------
+    Type: Box(2(n+1), 10) where n is the number of species (53 in the default GRI-MECH 3.0 chemical mechanism)
+        Num	            Observation                 Min         Max
+        ---             -----------                 ---         ---
+        0	            Temperature (K)             0           3000
+        1	            Density (kg/m3)             0           10
+        2 - n+1         Mole fractions              0           1
+        n+2 - 2n+1      Net production rates        -Inf        Inf
+                    
+    
+    Actions
+    -------
+    Type: Box(3) - set an entrainment (i.e., mass flow) rate for each fluid stream in kilograms per second (kg/s) 
+    Note: This rate is constraint by physical limits, which are specified through entrainment time scales tau_ent_main and tau_ent_sec
 
-    Actions:
-        Type: Box(3) - entrain a fraction of remaining fluid streams
         Num         Action                  Min         Max
         ---         ------                  ---         ---
-        0           Entrain main burner     0           1
-        1           Entrain sec fuel        0           1
-        2           Entrain sec air         0           1
+        0           Entrain main burner     0           self.remaining_main_burner_mass/tau_ent_main
+        1           Entrain sec fuel        0           sec_fuel_remaining/tau_ent_sec
+        2           Entrain sec air         0           sec_air_remaining/tau_ent_sec
 
-        Note: 0 means nothing is entrained, 1 means entrain all remaining fluid
-    Reward is a function of:
-        - Distance between current temperature and target temperature: smaller distance = higher reward.
-        - CO
-        - NO
-    Starting State:
-        Choose final 10 rows from main burner simulation, append density and net production rates
-    Episode Termination:
-        1. Number of steps is greater than MAX_STEPS
-            OR
-        2. Temperature is within a certain threshold of the final temperature
-            AND
-        2. CO is within a certain threshold of the equilibrium CO value 
-            OR
-        3. Remaining reactants is less than 1e-9
+        Note #2: This is to constrain the agent to cases where entrainment isn't infinite; it is physically impossible to entrain remaining mass in one timestep (dt = 0.001 ms)
+    
+    Reward
+    ------
+        Depends on:
+            - Distance between current temperature and target temperature: smaller distance = higher reward.
+            - CO
+            - NO
+
+    Starting State
+    --------------
+    Choose final 10 rows from main burner simulation, append density and net production rates
+    
+    Episode Termination
+    -------------------
+    1. Number of steps is greater than MAX_STEPS
+        OR
+    2. Temperature is within a certain threshold of the final temperature
+        AND CO is within a certain threshold of the equilibrium CO value 
+        AND Remaining reactants is less than 1e-9
     """
     metadata = {'render.modes': ['human']}
 
@@ -87,7 +99,7 @@ class SimEnv(gym.Env, EzPickle):
         """Constructor for the SimEnv class. Call SimEnv(...) to create a SimEnv object.
 
         Arguments:
-            args {[type]} -- [description]
+            None
         """
 
         # super(SimEnv) returns the superclass, in this case gym.Env. Construct a gym.Env instance
@@ -121,14 +133,14 @@ class SimEnv(gym.Env, EzPickle):
         self.sec_stage_gas = ct.Solution(MECH)
         self.sec_stage_gas.TPX = 300, P, {'AR': 1.0}
         self.sec_stage_reactor = ct.ConstPressureReactor(self.sec_stage_gas)
-        self.sec_stage_reactor.volume = 1e-8
+        self.sec_stage_reactor.volume = 1e-8 # second stage starts off small, and grows as mass is entrained
         self.network = ct.ReactorNet(
             [self.main_burner_reactor, self.sec_stage_reactor])
 
         # Create main and secondary mass flow controllers and connect them to the secondary stage
         self.mfc_main = ct.MassFlowController(
             self.main_burner_reservoir, self.sec_stage_reactor)
-        self.mfc_main.set_mass_flow_rate(0)
+        self.mfc_main.set_mass_flow_rate(0) # zero initial mass flow rate
 
         self.mfc_air_sec = ct.MassFlowController(
             self.sec_air_reservoir, self.sec_stage_reactor)
@@ -140,6 +152,7 @@ class SimEnv(gym.Env, EzPickle):
 
         # Define action and observation spaces; must be gym.spaces
         # we're controlling three things: mdot_main, mdot_fuel_sec, mdot_air_sec
+        #TODO: check to see if chosen tau_ent and self.action_space.high definition allow for complete entrainment of mass
         self.action_space = spaces.Box(
             low=np.array([0,0,0]), 
             high=np.array([
@@ -157,9 +170,17 @@ class SimEnv(gym.Env, EzPickle):
             dtype=np.float64)
 
         self.observation_array = self._next_observation(init=True)
+        
+        # Reward variables for T, NO, and CO
+        self.reward_T = 0
+        self.reward_NO = 0 
+        self.reward_CO = 0
 
     def _next_observation(self, init=False):
-        if init:
+        """Return the next observation, i.e., 10 states up to and including this time step
+        """
+
+        if init: # initial observation is final 10 rows from main burner
             #? set initial observation to be 0 or time history from the flame?
             final_ten_rows = main_burner_df.iloc[-10:].copy()
             # append density by assuming that density after the flame is constant
@@ -170,17 +191,88 @@ class SimEnv(gym.Env, EzPickle):
                 np.tile(self.main_burner_gas.net_production_rates, (10, 1)) # repmat 10 rows
             ])        
         else:
-            # get observations and calculate rewards by stacking last 9 observations on top of current observation
+            # get observations and calculate rewards by stacking previous 9 observations on top of current observation
             return np.vstack((
                 self.observation_array[1:],
                 np.hstack([self.sec_stage_gas.state, self.sec_stage_gas.net_production_rates])
             ))            
 
+    def calculate_reward(self):
+        """Calculate and update environment's reward attribute at its given state.  
+        The goals of this "game" or simulation is to, when all reactants are consumed:  
+            0. Hit T_eq to within 0.5% error (+-10K for 1975K)
+            1. Keep CO within 125% of CO_eq WHEN REACTANTS ARE CONSUMED
+            2. Maintain minimum NO
+            3. Keep the combustor design as short as possible 
+
+        This is arguably the most important component of this simulation environment, 
+        as it determines whether an agent can be trained to achieve these goals.    
+        """
+        
+        # penalise SUPER HEAVILY if agent doesn't use up all reactants within 16 ms
+        if self.steps_taken == MAX_STEPS: 
+            self.reward = np.finfo(np.float64).min
+            return self.reward
+        else:
+            # convert NO and CO from mole fractions into volumetric ppm
+            NO_ppmvd = correctNOx(
+                self.sec_stage_gas.X[NO_idx],
+                self.sec_stage_gas.X[H2O_idx],
+                self.sec_stage_gas.X[O2_idx]) 
+            
+            CO_ppmvd = correctNOx(
+                self.sec_stage_gas.X[CO_idx],
+                self.sec_stage_gas.X[H2O_idx],
+                self.sec_stage_gas.X[O2_idx])
+            
+            # Temperature reward
+            T = self.sec_stage_gas.T
+            T_distance = np.abs(T - T_eq)
+            T_threshold = 0.20*T_eq # not sure if 15% is necessary
+            
+            CO_distance = CO_ppmvd - CO_eq
+            CO_threshold = 0.25*CO_eq
+            self.reward_T = np.exp(-100*(T_distance/T_threshold) + 100)
+            self.reward_NO = -15*(NO_ppmvd/25)**3 + 15
+            self.reward_CO = -5*(CO_distance/CO_threshold)**2 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
+            self.reward = self.reward_T + self.reward_NO + self.reward_CO - 10*self.age/milliseconds # penalize for long times        
+
     def step(self, action):
+        """
+        Advance the state of simulation environment by one timestep (given by self.dt). 
+
+        Parameters
+        ----------
+        action : array_like
+            A collection/sequence of actions as described in the SimEnv docstring. 
+            action[0] — the mass flow rate in kilograms per second (kg/s) of the main burner fluid/products
+            action[1] — mass flow rate (kg/s) of the secondary fuel
+            action[2] — mass flow rate (kg/s) of the secondary air/oxidizer
+        
+        Returns
+        -------
+        self.observation_array : np.ndarray
+            A [2(n+1) x 10] array where n is the number of species (53 in GRI-MECH 3.0)
+            This represents the 10 latest thermodynamic states up to and including the current time step.
+        self.reward : float
+            A value representing the reward/score of the environment at its current state.
+
+        Notes
+        -----
+            1. The action space may eventually be expanded to include more secondary reactants, e.g., H2O, He, etc.
+            2. self.reward may or may not be cumulative across the entire history of the environment. This behavior is TBD.        
+            3. Internally, the substeps are as follows: 
+                i.   Set secondary stage reactor's mass flow controllers to the input mass flow rates. 
+                ii.  Advance the reactor network by self.dt, taking as many internal integrator steps as necessary.
+                iii. Update remaining reservoir mass and increment relevant counters 
+                iv.  Update action space to ensure that flow rate does not exceed remaining mass in reservoirs
+                v.   Calculate reward, get observation, and check if episode is complete 
+        """
+
         assert self.action_space.contains(
             action), "%r (%s) invalid" % (action, type(action))
 
-        # Calculate mdots based on action input (ideally predicted by model)
+        # Calculate mdots based on action input (typically predicted by model/agent policy)
         # action is a 1x3 array, so take the first row first
         mdot_main = action[0] 
         mdot_fuel_sec = action[1]
@@ -206,7 +298,6 @@ class SimEnv(gym.Env, EzPickle):
         self.sec_air_remaining -= action[2] * self.dt
 
         # update action space
-        #TODO: find a way to set entrainment rate based on physical limitations, i.e., can't be infinitely fast
         self.action_space = spaces.Box(
             low=np.array([0,0,0]), 
             high=np.array([
@@ -217,27 +308,8 @@ class SimEnv(gym.Env, EzPickle):
         
         self.observation_array = self._next_observation() # update observation array
 
-        # convert NO and CO from mole fractions into volumetric ppm
-        NO_ppmvd = correctNOx(
-            self.sec_stage_gas.X[NO_idx],
-            self.sec_stage_gas.X[H2O_idx],
-            self.sec_stage_gas.X[O2_idx]) 
-        
-        CO_ppmvd = correctNOx(
-            self.sec_stage_gas.X[CO_idx],
-            self.sec_stage_gas.X[H2O_idx],
-            self.sec_stage_gas.X[O2_idx])
-        
-        T_distance = np.abs(self.sec_stage_gas.T - T_eq)
-        T_threshold = 0.15*T_eq
+        self.calculate_reward()
 
-        CO_distance = CO_ppmvd - CO_eq
-        CO_threshold = 0.25*CO_eq
-        reward_T = -10*(T_distance/T_threshold)**3 + 10
-        reward_NO = -5*(NO_ppmvd/25)**3 + 5
-        reward_CO = -5*(CO_distance/CO_threshold)**3 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
-        reward = reward_T + reward_NO + reward_CO - self.age/milliseconds # penalize for long times
-        self.reward = reward
         game_over = self.steps_taken > MAX_STEPS \
                     or (\
                         T_distance <= T_threshold \
@@ -246,7 +318,7 @@ class SimEnv(gym.Env, EzPickle):
                         and self.sec_air_remaining <= 1e-9 \
                         and self.sec_fuel_remaining <= 1e-9                         
                     )
-        return self.observation_array, reward, game_over, {}
+        return self.observation_array, self.reward, game_over, {}
 
     def reset(self):
         self.__init__() # nuclear option: possibly slower but safe 
@@ -264,32 +336,28 @@ class SimEnv(gym.Env, EzPickle):
             self.sec_stage_gas.X[H2O_idx],
             self.sec_stage_gas.X[O2_idx])
 
-        T_distance = np.abs(self.sec_stage_gas.T - T_eq)
-        T_threshold = 0.15*T_eq
-
-        CO_distance = np.abs(CO_ppmvd - CO_eq)
-        CO_threshold = 0.25*CO_eq
-
-        reward_T = -20*(T_distance/T_threshold)**3 + 20
-        reward_NO = -5*(NO_ppmvd/25)**3 + 5
-        reward_CO = -5*(CO_distance/CO_threshold)**3 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
-        
         phi = self.sec_stage_gas.get_equivalence_ratio()
         phi_norm = phi/(1 + phi)
         T = self.sec_stage_gas.T
-        if self.steps_taken == 0:
-            print(f"step\tage (ms)\tT\tphi_norm\tNO\tCO\tReward\tReward T\tReward NO\tReward CO")
+        if self.steps_taken < 2:
+            print(f"step|age_(ms)|T|phi_norm|NO|CO|Rem_Main|Rem_SecFuel|Rem_SecAir|Mdot_Main|Mdot_SecFuel|Mdot_SecAir|Reward|Reward_T|Reward_NO|Reward_CO")
             print(f"=============================================================")
         print(
-        f"{self.steps_taken}\t",
-        f"{self.age/milliseconds:.2f}\t",
-        f"{T:.2f}\t",
-        f"{phi_norm:.2f}\t",
-        f"{NO_ppmvd:.2f}\t",
-        f"{CO_ppmvd:.2f}\t", 
-        f"{self.reward:.2f}\t",
-        f"{reward_T:.2f}\t{reward_NO:.2f}\t{reward_CO:.2f}"
-        )        
+            f"{self.steps_taken}|",
+            f"{self.age/milliseconds:.2f}|",
+            f"{T:.2f}|",
+            f"{phi_norm:.2f}|",
+            f"{NO_ppmvd:.2f}|",
+            f"{CO_ppmvd:.2f}|", 
+            f"{self.remaining_main_burner_mass:.2f}|",
+            f"{self.sec_fuel_remaining:.2f}|",
+            f"{self.sec_air_remaining:.2f}|",
+            f"{self.mfc_main.mdot(0):.2f}|",
+            f"{self.mfc_fuel_sec.mdot(0):.2f}|",
+            f"{self.mfc_air_sec.mdot(0):.2f}|",            
+            f"{self.reward:.2f}|",
+            f"{self.reward_T:.2f}|{self.reward_NO:.2f}|{self.reward_CO:.2f}"
+        )              
         # return 
 
     def close(self):

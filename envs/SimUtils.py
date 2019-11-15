@@ -50,6 +50,12 @@ def premix(phi=0.4, fuel={'CH4': 1}, ox={'N2': 0.79, 'O2': 0.21}, mech='gri30.xm
 
 @jit(nopython=True, fastmath=True, cache=True)
 def correctNOx(X_i, X_H2O, X_O2):
+    """
+    Correct X_i into volumetric, dry basis at 15% reference O2, as is common for emissions measurements. 
+    For more information, see: 
+    https://en.wikipedia.org/wiki/Useful_conversions_and_formulas_for_air_dispersion_modeling#Correcting_to_a_dry_basis
+
+    """
     dry_i = X_i/(1 - X_H2O)
     dry_O2 = X_O2/(1 - X_H2O)
     corrected = dry_i*(20.9 - 15)/(20.9 - dry_O2*100)
