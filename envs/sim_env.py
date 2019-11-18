@@ -154,13 +154,17 @@ class SimEnv(gym.Env, EzPickle):
         # Define action and observation spaces; must be gym.spaces
         # we're controlling three things: mdot_main, mdot_fuel_sec, mdot_air_sec
         #TODO: check to see if chosen tau_ent and self.action_space.high definition allow for complete entrainment of mass
+        # self.action_space = spaces.Box(
+        #     low=np.array([0,0,0]), 
+        #     high=np.array([
+        #         self.remaining_main_burner_mass/tau_ent_main, 
+        #         self.sec_fuel_remaining/tau_ent_sec, 
+        #         self.sec_air_remaining/tau_ent_sec]), 
+        #     dtype=np.float64)
         self.action_space = spaces.Box(
             low=np.array([0,0,0]), 
-            high=np.array([
-                self.remaining_main_burner_mass/tau_ent_main, 
-                self.sec_fuel_remaining/tau_ent_sec, 
-                self.sec_air_remaining/tau_ent_sec]), 
-            dtype=np.float64)
+            high=np.array([1,1,1]), 
+            dtype=np.float64)        
         low = np.array([0]*55 + [-np.finfo(np.float32).max]*53)
         high = np.array([3000, 10] + [1]*53 + [np.finfo(np.float64).max]*53)
         num_cols = len(self.sec_stage_gas.state) + \
@@ -266,13 +270,14 @@ class SimEnv(gym.Env, EzPickle):
                 v.   Calculate reward, get observation, and check if episode is complete 
         """
 
-        assert self.action_space.contains(action), "%r (%s) invalid" % (action, type(action))
+        assert self.action_space.contains(action), \
+            f"Action space does not contain {action}. action_space.high - action = {self.action_space.high - action}" 
 
         # Calculate mdots based on action input (typically predicted by model/agent policy)
         # action is a 1x3 array, so take the first row first
-        mdot_main = action[0] 
-        mdot_fuel_sec = action[1]
-        mdot_air_sec = action[2]
+        mdot_main = action[0] * self.remaining_main_burner_mass/tau_ent_main
+        mdot_fuel_sec = action[1] * self.sec_fuel_remaining/tau_ent_sec
+        mdot_air_sec = action[2] * self.sec_air_remaining/tau_ent_sec
 
 
         self.mfc_main.set_mass_flow_rate(mdot_main)
@@ -289,18 +294,18 @@ class SimEnv(gym.Env, EzPickle):
         # TODO: check if main burner reservoir contents are being updated
         self.main_burner_reservoir.syncState()
 
-        self.remaining_main_burner_mass -= action[0] * self.dt
-        self.sec_fuel_remaining -= action[1] * self.dt
-        self.sec_air_remaining -= action[2] * self.dt
+        self.remaining_main_burner_mass -= mdot_main * self.dt
+        self.sec_fuel_remaining -= mdot_fuel_sec * self.dt
+        self.sec_air_remaining -= mdot_air_sec * self.dt
 
         # update action space
-        self.action_space = spaces.Box(
-            low=np.array([0,0,0]), 
-            high=np.array([
-                self.remaining_main_burner_mass/tau_ent_main, 
-                self.sec_fuel_remaining/tau_ent_sec, 
-                self.sec_air_remaining/tau_ent_sec]), 
-            dtype=np.float64)
+        # self.action_space = spaces.Box(
+        #     low=np.array([0,0,0]), 
+        #     high=np.array([
+        #         self.remaining_main_burner_mass/tau_ent_main, 
+        #         self.sec_fuel_remaining/tau_ent_sec, 
+        #         self.sec_air_remaining/tau_ent_sec]), 
+        #     dtype=np.float64)
         
         self.observation_array = self._next_observation() # update observation array
 
