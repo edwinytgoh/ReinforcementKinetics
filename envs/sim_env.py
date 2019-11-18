@@ -231,7 +231,7 @@ class SimEnv(gym.Env, EzPickle):
             else:
                 self.reward_CO = 0                 
             self.reward_NO = 100*sigmoid(-0.4*(NO_ppmvd-15))
-            self.reward = (self.reward_T + self.reward_NO + self.reward_CO - (self.age/milliseconds)**3) # penalize for long times        
+            self.reward += (self.reward_T + self.reward_NO + self.reward_CO - (self.age/milliseconds)**3) # penalize for long times        
 
     def step(self, action):
         """
