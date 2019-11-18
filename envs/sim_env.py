@@ -160,7 +160,7 @@ class SimEnv(gym.Env, EzPickle):
                 self.remaining_main_burner_mass/tau_ent_main, 
                 self.sec_fuel_remaining/tau_ent_sec, 
                 self.sec_air_remaining/tau_ent_sec]), 
-            dtype=np.float32)
+            dtype=np.float64)
         low = np.array([0]*55 + [-np.finfo(np.float32).max]*53)
         high = np.array([3000, 10] + [1]*53 + [np.finfo(np.float64).max]*53)
         num_cols = len(self.sec_stage_gas.state) + \
@@ -176,6 +176,7 @@ class SimEnv(gym.Env, EzPickle):
         self.reward_T = 0
         self.reward_NO = 0 
         self.reward_CO = 0
+        self.reward_reactants = 0
 
     def _next_observation(self, init=False):
         """Return the next observation, i.e., 10 states up to and including this time step
@@ -201,7 +202,7 @@ class SimEnv(gym.Env, EzPickle):
     def calculate_reward(self):
         
         # penalise SUPER HEAVILY if agent doesn't use up all reactants within 16 ms
-        if self.steps_taken == MAX_STEPS: 
+        if self.steps_taken >= MAX_STEPS-2: 
             self.reward = np.finfo(np.float64).min
             return self.reward
         else:
@@ -230,8 +231,8 @@ class SimEnv(gym.Env, EzPickle):
                 self.reward_CO = 100*sigmoid(-3*(CO_ppmvd - CO_threshold - 2)) #Note: CO_threshold = 1.25 CO_eq
             else:
                 self.reward_CO = 0                 
-            self.reward_NO = 100*sigmoid(-0.4*(NO_ppmvd-15))
-            self.reward += (self.reward_T + self.reward_NO + self.reward_CO - (self.age/milliseconds)**3) # penalize for long times        
+            self.reward_NO = 200*sigmoid(-0.4*(NO_ppmvd-15))
+            self.reward = (self.reward_T + self.reward_NO + self.reward_CO - (self.age/milliseconds)**3) # penalize for long times        
 
     def step(self, action):
         """
@@ -265,8 +266,7 @@ class SimEnv(gym.Env, EzPickle):
                 v.   Calculate reward, get observation, and check if episode is complete 
         """
 
-        assert self.action_space.contains(
-            action), "%r (%s) invalid" % (action, type(action))
+        assert self.action_space.contains(action), "%r (%s) invalid" % (action, type(action))
 
         # Calculate mdots based on action input (typically predicted by model/agent policy)
         # action is a 1x3 array, so take the first row first
@@ -300,7 +300,7 @@ class SimEnv(gym.Env, EzPickle):
                 self.remaining_main_burner_mass/tau_ent_main, 
                 self.sec_fuel_remaining/tau_ent_sec, 
                 self.sec_air_remaining/tau_ent_sec]), 
-            dtype=np.float32)
+            dtype=np.float64)
         
         self.observation_array = self._next_observation() # update observation array
 
@@ -320,6 +320,8 @@ class SimEnv(gym.Env, EzPickle):
         return self._next_observation(init=True)
 
     def render(self, mode='human'):
+        if mode == 'rgb_array':
+            return np.zeros((2,2,3))
         # convert NO and CO from mole fractions into volumetric ppm
         NO_ppmvd = correctNOx(
             self.sec_stage_gas.X[NO_idx],
@@ -335,7 +337,7 @@ class SimEnv(gym.Env, EzPickle):
         phi_norm = phi/(1 + phi)
         T = self.sec_stage_gas.T
         if self.steps_taken < 2:
-            print(f"step|age_(ms)|T|phi_norm|NO|CO|Rem_Main|Rem_SecFuel|Rem_SecAir|Mdot_Main|Mdot_SecFuel|Mdot_SecAir|Max_Main|Max_SecFuel|Max_SecAir|Reward|Reward_T|Reward_NO|Reward_CO")
+            print(f"step|age_(ms)|T|phi_norm|NO|CO|Rem_Main|Rem_SecFuel|Rem_SecAir|Mdot_Main|Mdot_SecFuel|Mdot_SecAir|Max_Main|Max_SecFuel|Max_SecAir|Reward|Reward_Reactants|Reward_T|Reward_NO|Reward_CO")
             print(f"=============================================================")
         print(
             f"{self.steps_taken}|",
@@ -353,7 +355,7 @@ class SimEnv(gym.Env, EzPickle):
             f"{self.action_space.high[0]:.2f}|",
             f"{self.action_space.high[1]:.2f}|",
             f"{self.action_space.high[2]:.2f}|",  
-            f"{self.reward:.2f}|",
+            f"{self.reward:.2f}|{self.reward_reactants:.2f}|",
             f"{self.reward_T:.2f}|{self.reward_NO:.2f}|{self.reward_CO:.2f}"
         )              
         # return 
