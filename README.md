@@ -7,10 +7,11 @@ A reinforcement learning approach to designing high-temperature, low-NOx gas tur
 The main environment file is found in envs/**sim_env.py**. This file defines the `SimEnv` class, which extends Open AI Gym's base [Env](https://github.com/openai/gym/blob/master/gym/core.py) class.
 
 In addition, there are Jupyter notebooks in the root directory that import from sim_env.py:
-    1. SimpleAgent.ipynb — train a simple PPO2 agent using a dummy vectorized environment and save the agent in the "Trained Models" folder.
-    2. TestTrainedModel.ipynb — load parameters from the trained PPO2 agent and use it to "replay" the simulation. 
-    3. MultiprocessingAgent.ipynb — train a PPO2 agent on a vectorized environment using multiple MPI processes. Still needs additional debugging. 
-    4. TestSimEnv.ipynb — simple sanity checks to ensure SimEnv is instantiatble.
+
+1. SimpleAgent.ipynb — train a simple PPO2 agent using a dummy vectorized environment and save the agent in the "Trained Models" folder.
+2. TestTrainedModel.ipynb — load parameters from the trained PPO2 agent and use it to "replay" the simulation.
+3. MultiprocessingAgent.ipynb — train a PPO2 agent on a vectorized environment using multiple MPI processes. Still needs additional debugging.
+4. TestSimEnv.ipynb — simple sanity checks to ensure SimEnv is instantiatble.
 
 ## Requirements
 

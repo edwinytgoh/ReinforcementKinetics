@@ -222,5 +222,6 @@ def equil(phi, T_air = 650, T_fuel = 300, P = 25*ct.one_atm, mech="gri30.xml"):
     NO_ppmvd = correctNOx(mixture['NO'].X, mixture['H2O'].X, mixture['O2'].X) 
     return np.hstack([mixture.T, CO_ppmvd, NO_ppmvd]) 
 
-def create_combustor_network():
-    pass
+@jit(nopython=True, fastmath=True)
+def sigmoid(x): 
+    return 1/(1 + np.exp(-x))

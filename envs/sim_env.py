@@ -3,7 +3,7 @@ import cantera as ct
 import numpy as np
 from gym import spaces
 from gym.utils import EzPickle
-from envs.SimUtils import solvePhi_airSplit, equil, runMainBurner, correctNOx
+from envs.SimUtils import solvePhi_airSplit, equil, runMainBurner, correctNOx, sigmoid
 
 milliseconds = 1e-3
 DT = 0.001*milliseconds  # this is the time step used in the simulation
@@ -13,6 +13,7 @@ TAU_MAIN = 15 * milliseconds  # constant main burner length
 PHI_MAIN = 0.3719  # i.e., m_fuel/m_air = 0.3719 * stoichiometric fuel-air-ratio
 PHI_GLOBAL = 0.635  # for 1975 K final temperature
 T_eq, CO_eq, NO_eq = equil(PHI_GLOBAL)
+CO_threshold = 1.25*CO_eq 
 
 T_FUEL = 300
 T_AIR = 650
@@ -90,7 +91,6 @@ class SimEnv(gym.Env, EzPickle):
     1. Number of steps is greater than MAX_STEPS
         OR
     2. Temperature is within a certain threshold of the final temperature
-        AND CO is within a certain threshold of the equilibrium CO value 
         AND Remaining reactants is less than 1e-9
     """
     metadata = {'render.modes': ['human']}
@@ -110,6 +110,7 @@ class SimEnv(gym.Env, EzPickle):
         self.age = 0
         self.steps_taken = 0
         self.reward = 0
+        self.T_within_threshold = False
         # Create main burner objects
         self.main_burner_gas = ct.Solution(MECH)
         self.main_burner_gas.TPX = main_burner_reactor.thermo.TPX
@@ -198,16 +199,6 @@ class SimEnv(gym.Env, EzPickle):
             ))            
 
     def calculate_reward(self):
-        """Calculate and update environment's reward attribute at its given state.  
-        The goals of this "game" or simulation is to, when all reactants are consumed:  
-            0. Hit T_eq to within 0.5% error (+-10K for 1975K)
-            1. Keep CO within 125% of CO_eq WHEN REACTANTS ARE CONSUMED
-            2. Maintain minimum NO
-            3. Keep the combustor design as short as possible 
-
-        This is arguably the most important component of this simulation environment, 
-        as it determines whether an agent can be trained to achieve these goals.    
-        """
         
         # penalise SUPER HEAVILY if agent doesn't use up all reactants within 16 ms
         if self.steps_taken == MAX_STEPS: 
@@ -219,23 +210,28 @@ class SimEnv(gym.Env, EzPickle):
                 self.sec_stage_gas.X[NO_idx],
                 self.sec_stage_gas.X[H2O_idx],
                 self.sec_stage_gas.X[O2_idx]) 
-            
-            CO_ppmvd = correctNOx(
-                self.sec_stage_gas.X[CO_idx],
-                self.sec_stage_gas.X[H2O_idx],
-                self.sec_stage_gas.X[O2_idx])
-            
+           
             # Temperature reward
             T = self.sec_stage_gas.T
-            T_distance = np.abs(T - T_eq)
-            T_threshold = 0.20*T_eq # not sure if 15% is necessary
-            
-            CO_distance = CO_ppmvd - CO_eq
-            CO_threshold = 0.25*CO_eq
-            self.reward_T = np.exp(-100*(T_distance/T_threshold) + 100)
-            self.reward_NO = -15*(NO_ppmvd/25)**3 + 15
-            self.reward_CO = -5*(CO_distance/CO_threshold)**2 + 5 #TODO: Check whether this increases for CO_ppmvd < CO_eq
-            self.reward = self.reward_T + self.reward_NO + self.reward_CO - 10*self.age/milliseconds # penalize for long times        
+            T_distance_percent = np.abs(T - T_eq)/T_eq
+            T_threshold_percent = 0.9*0.005 # +-10K for 1975K 
+            self.reward_T = 100*sigmoid(-T_threshold_percent*1000*(T_distance_percent - T_threshold_percent)) # see reward shaping.ipynb
+            self.T_within_threshold = T_distance_percent < 0.005
+            # Remaining reactants 
+            reactants_left = self.remaining_main_burner_mass + self.sec_air_remaining + self.sec_fuel_remaining
+            reactants_left_percent = 100*reactants_left/(M_fuel_main + M_air_main + M_fuel_sec + M_air_sec) # initial mass should be 100 
+            self.reward_reactants = (100 - reactants_left_percent)**2
+
+            if reactants_left_percent <= 5:     
+                CO_ppmvd = correctNOx(
+                    self.sec_stage_gas.X[CO_idx],
+                    self.sec_stage_gas.X[H2O_idx],
+                    self.sec_stage_gas.X[O2_idx])                            
+                self.reward_CO = 100*sigmoid(-3*(CO_ppmvd - CO_threshold - 2)) #Note: CO_threshold = 1.25 CO_eq
+            else:
+                self.reward_CO = 0                 
+            self.reward_NO = 100*sigmoid(-0.4*(NO_ppmvd-15))
+            self.reward = (self.reward_T + self.reward_NO + self.reward_CO - (self.age/milliseconds)**3) # penalize for long times        
 
     def step(self, action):
         """
@@ -312,8 +308,7 @@ class SimEnv(gym.Env, EzPickle):
 
         game_over = self.steps_taken > MAX_STEPS \
                     or (\
-                        T_distance <= T_threshold \
-                        and np.abs(CO_distance) <= CO_threshold \
+                        self.T_within_threshold \
                         and self.remaining_main_burner_mass <= 1e-9 \
                         and self.sec_air_remaining <= 1e-9 \
                         and self.sec_fuel_remaining <= 1e-9                         
@@ -340,7 +335,7 @@ class SimEnv(gym.Env, EzPickle):
         phi_norm = phi/(1 + phi)
         T = self.sec_stage_gas.T
         if self.steps_taken < 2:
-            print(f"step|age_(ms)|T|phi_norm|NO|CO|Rem_Main|Rem_SecFuel|Rem_SecAir|Mdot_Main|Mdot_SecFuel|Mdot_SecAir|Reward|Reward_T|Reward_NO|Reward_CO")
+            print(f"step|age_(ms)|T|phi_norm|NO|CO|Rem_Main|Rem_SecFuel|Rem_SecAir|Mdot_Main|Mdot_SecFuel|Mdot_SecAir|Max_Main|Max_SecFuel|Max_SecAir|Reward|Reward_T|Reward_NO|Reward_CO")
             print(f"=============================================================")
         print(
             f"{self.steps_taken}|",
@@ -355,6 +350,9 @@ class SimEnv(gym.Env, EzPickle):
             f"{self.mfc_main.mdot(0):.2f}|",
             f"{self.mfc_fuel_sec.mdot(0):.2f}|",
             f"{self.mfc_air_sec.mdot(0):.2f}|",            
+            f"{self.action_space.high[0]:.2f}|",
+            f"{self.action_space.high[1]:.2f}|",
+            f"{self.action_space.high[2]:.2f}|",  
             f"{self.reward:.2f}|",
             f"{self.reward_T:.2f}|{self.reward_NO:.2f}|{self.reward_CO:.2f}"
         )              
