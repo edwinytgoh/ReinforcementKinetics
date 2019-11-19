@@ -219,13 +219,14 @@ class SimEnv(gym.Env, EzPickle):
             # Temperature reward
             T = self.sec_stage_gas.T
             T_distance_percent = np.abs(T - T_eq)/T_eq
-            T_threshold_percent = 0.9*0.005 # +-10K for 1975K 
-            self.reward_T = 100*sigmoid(-T_threshold_percent*1000*(T_distance_percent - T_threshold_percent)) # see reward shaping.ipynb
+            T_threshold_percent = 0.02 # +-20K for 1975K 
+            # we don't reward temperatures more than 5% from T_eq, but sharply increase the reward closer to 0% distance 
+            self.reward_T = 200*sigmoid(-350*(T_distance_percent - T_threshold_percent)) # see reward shaping.ipynb
             self.T_within_threshold = T_distance_percent < 0.005
             # Remaining reactants 
             reactants_left = self.remaining_main_burner_mass + self.sec_air_remaining + self.sec_fuel_remaining
-            reactants_left_percent = 100*reactants_left/(M_fuel_main + M_air_main + M_fuel_sec + M_air_sec) # initial mass should be 100 
-            self.reward_reactants = (100 - reactants_left_percent)**2
+            reactants_left_percent = reactants_left/(M_fuel_main + M_air_main + M_fuel_sec + M_air_sec) # initial mass should be 100 
+            self.reward_reactants = 200 * (1 - reactants_left_percent)
 
             if reactants_left_percent <= 5:     
                 CO_ppmvd = correctNOx(
@@ -235,8 +236,8 @@ class SimEnv(gym.Env, EzPickle):
                 self.reward_CO = 100*sigmoid(-3*(CO_ppmvd - CO_threshold - 2)) #Note: CO_threshold = 1.25 CO_eq
             else:
                 self.reward_CO = 0                 
-            self.reward_NO = 200*sigmoid(-0.4*(NO_ppmvd-15))
-            self.reward = (self.reward_T + self.reward_NO + self.reward_CO - (self.age/milliseconds)**3) # penalize for long times        
+            self.reward_NO = 500*sigmoid(-0.4*(NO_ppmvd-15))
+            self.reward = (self.reward_T + self.reward_NO + self.reward_CO + self.reward_reactants - (self.age/milliseconds)**3) # penalize for long times        
 
     def step(self, action):
         """
@@ -275,9 +276,13 @@ class SimEnv(gym.Env, EzPickle):
 
         # Calculate mdots based on action input (typically predicted by model/agent policy)
         # action is a 1x3 array, so take the first row first
-        mdot_main = action[0] * self.remaining_main_burner_mass/tau_ent_main
-        mdot_fuel_sec = action[1] * self.sec_fuel_remaining/tau_ent_sec
-        mdot_air_sec = action[2] * self.sec_air_remaining/tau_ent_sec
+        mdot_main_max = self.remaining_main_burner_mass/self.dt
+        mdot_fuel_sec_max = self.sec_fuel_remaining/self.dt
+        mdot_air_sec_max = self.sec_air_remaining/self.dt
+        
+        mdot_main = min(action[0] * (M_fuel_main + M_air_main)/tau_ent_main, mdot_main_max)
+        mdot_fuel_sec = min(action[1] * (M_fuel_sec)/tau_ent_sec, mdot_fuel_sec_max)
+        mdot_air_sec = min(action[2] * (M_air_sec)/tau_ent_sec, mdot_air_sec_max)
 
 
         self.mfc_main.set_mass_flow_rate(mdot_main)
