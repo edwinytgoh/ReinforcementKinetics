@@ -154,17 +154,17 @@ class SimEnv(gym.Env, EzPickle):
         # Define action and observation spaces; must be gym.spaces
         # we're controlling three things: mdot_main, mdot_fuel_sec, mdot_air_sec
         #TODO: check to see if chosen tau_ent and self.action_space.high definition allow for complete entrainment of mass
-        # self.action_space = spaces.Box(
-        #     low=np.array([0,0,0]), 
-        #     high=np.array([
-        #         self.remaining_main_burner_mass/tau_ent_main, 
-        #         self.sec_fuel_remaining/tau_ent_sec, 
-        #         self.sec_air_remaining/tau_ent_sec]), 
-        #     dtype=np.float64)
         self.action_space = spaces.Box(
             low=np.array([0,0,0]), 
-            high=np.array([1,1,1]), 
-            dtype=np.float64)        
+            high=np.array([
+                self.remaining_main_burner_mass/tau_ent_main, 
+                self.sec_fuel_remaining/tau_ent_sec, 
+                self.sec_air_remaining/tau_ent_sec]), 
+            dtype=np.float64)
+        # self.action_space = spaces.Box(
+        #     low=np.array([0,0,0]), 
+        #     high=np.array([1,1,1]), 
+        #     dtype=np.float64)        
         low = np.array([0]*55 + [-np.finfo(np.float32).max]*53)
         high = np.array([3000, 10] + [1]*53 + [np.finfo(np.float64).max]*53)
         num_cols = len(self.sec_stage_gas.state) + \
@@ -206,7 +206,7 @@ class SimEnv(gym.Env, EzPickle):
     def calculate_reward(self):
         
         # penalise SUPER HEAVILY if agent doesn't use up all reactants within 16 ms
-        if self.steps_taken >= MAX_STEPS-2: 
+        if self.steps_taken >= MAX_STEPS-1: 
             self.reward = np.finfo(np.float64).min
             return self.reward
         else:
@@ -280,10 +280,9 @@ class SimEnv(gym.Env, EzPickle):
         mdot_fuel_sec_max = self.sec_fuel_remaining/self.dt
         mdot_air_sec_max = self.sec_air_remaining/self.dt
         
-        mdot_main = min(action[0] * (M_fuel_main + M_air_main)/tau_ent_main, mdot_main_max)
-        mdot_fuel_sec = min(action[1] * (M_fuel_sec)/tau_ent_sec, mdot_fuel_sec_max)
-        mdot_air_sec = min(action[2] * (M_air_sec)/tau_ent_sec, mdot_air_sec_max)
-
+        mdot_main = min(action[0], mdot_main_max)
+        mdot_fuel_sec = min(action[1], mdot_fuel_sec_max)
+        mdot_air_sec = min(action[2], mdot_air_sec_max)
 
         self.mfc_main.set_mass_flow_rate(mdot_main)
         self.mfc_fuel_sec.set_mass_flow_rate(mdot_fuel_sec)
@@ -296,7 +295,7 @@ class SimEnv(gym.Env, EzPickle):
         self.network.advance(self.age)
 
         # sync the main burner reservoir state to match the updated main burner reactor
-        # TODO: check if main burner reservoir contents are being updated
+        # TODO: check if main burner reservoirb contents are being updated
         self.main_burner_reservoir.syncState()
 
         self.remaining_main_burner_mass -= mdot_main * self.dt
