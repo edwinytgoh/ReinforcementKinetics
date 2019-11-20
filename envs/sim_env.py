@@ -231,9 +231,9 @@ class SimEnv(gym.Env, EzPickle):
             # Remaining reactants 
             reactants_left = self.remaining_main_burner_mass + self.sec_air_remaining + self.sec_fuel_remaining
             reactants_left_percent = reactants_left/(M_fuel_main + M_air_main + M_fuel_sec + M_air_sec) # initial mass should be 100 
-            self.reward_reactants = 200 * (1 - reactants_left_percent)
+            self.reward_reactants = 1000 * (1 - reactants_left_percent)
 
-            if reactants_left_percent <= 5:     
+            if reactants_left_percent <= 0.05:     
                 CO_ppmvd = correctNOx(
                     self.sec_stage_gas.X[CO_idx],
                     self.sec_stage_gas.X[H2O_idx],
