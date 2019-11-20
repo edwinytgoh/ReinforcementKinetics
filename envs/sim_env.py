@@ -7,7 +7,7 @@ from envs.SimUtils import solvePhi_airSplit, equil, runMainBurner, correctNOx, s
 
 milliseconds = 1e-3
 DT = 0.001*milliseconds  # this is the time step used in the simulation
-MAX_STEPS = 16*milliseconds/DT  # 15 ms total time gives max steps of 15,000
+MAX_STEPS = int(16*milliseconds/DT)  # 15 ms total time gives max steps of 15,000
 TAU_MAIN = 15 * milliseconds  # constant main burner length
 # definition: phi = (m_fuel/m_air)/(m_fuel/m_air)_stoich; phi > 1 means excess fuel; < 1 means excess air
 PHI_MAIN = 0.3719  # i.e., m_fuel/m_air = 0.3719 * stoichiometric fuel-air-ratio
@@ -221,7 +221,7 @@ class SimEnv(gym.Env, EzPickle):
             T_distance_percent = np.abs(T - T_eq)/T_eq
             # T_threshold_percent = 0.02 # +-20K for 1975K 
             # we don't reward temperatures more than 5% from T_eq, but sharply increase the reward closer to 0% distance 
-            self.reward_T = 200*sigmoid(-350*(T_distance_percent - T_threshold_percent)) # see reward shaping.ipynb
+            # self.reward_T = 200*sigmoid(-350*(T_distance_percent - T_threshold_percent)) # see reward shaping.ipynb
             if T_distance_percent < 0.1:
                 self.reward_T = 900*sigmoid(-100*(T_distance_percent - 0.055))
             else: 
@@ -242,7 +242,7 @@ class SimEnv(gym.Env, EzPickle):
                 self.reward_CO = 0                 
             self.reward_NO = 500*sigmoid(-0.4*(NO_ppmvd-15))
             self.reward = (self.reward_T + self.reward_NO + self.reward_CO + self.reward_reactants - (self.age/milliseconds)**3) # penalize for long times        
-
+            return self.reward
     def step(self, action):
         """
         Advance the state of simulation environment by one timestep (given by self.dt). 
