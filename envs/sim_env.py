@@ -207,7 +207,8 @@ class SimEnv(gym.Env, EzPickle):
         
         # penalise SUPER HEAVILY if agent doesn't use up all reactants within 16 ms
         if self.steps_taken == MAX_STEPS: 
-            self.reward = np.finfo(np.float64).min
+            # self.reward = np.finfo(np.float32).min
+            self.reward = -1e16
             return self.reward
         else:
             # convert NO and CO from mole fractions into volumetric ppm
