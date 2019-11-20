@@ -206,7 +206,7 @@ class SimEnv(gym.Env, EzPickle):
     def calculate_reward(self):
         
         # penalise SUPER HEAVILY if agent doesn't use up all reactants within 16 ms
-        if self.steps_taken >= MAX_STEPS-1: 
+        if self.steps_taken == MAX_STEPS: 
             self.reward = np.finfo(np.float64).min
             return self.reward
         else:
@@ -219,10 +219,14 @@ class SimEnv(gym.Env, EzPickle):
             # Temperature reward
             T = self.sec_stage_gas.T
             T_distance_percent = np.abs(T - T_eq)/T_eq
-            T_threshold_percent = 0.02 # +-20K for 1975K 
+            # T_threshold_percent = 0.02 # +-20K for 1975K 
             # we don't reward temperatures more than 5% from T_eq, but sharply increase the reward closer to 0% distance 
             self.reward_T = 200*sigmoid(-350*(T_distance_percent - T_threshold_percent)) # see reward shaping.ipynb
-            self.T_within_threshold = T_distance_percent < 0.005
+            if T_distance_percent < 0.1:
+                self.reward_T = 900*sigmoid(-100*(T_distance_percent - 0.055))
+            else: 
+                self.reward_T = 500*sigmoid(-10*(T_distance_percent - 0.5)) - 480
+            self.T_within_threshold = T_distance_percent <= 0.01
             # Remaining reactants 
             reactants_left = self.remaining_main_burner_mass + self.sec_air_remaining + self.sec_fuel_remaining
             reactants_left_percent = reactants_left/(M_fuel_main + M_air_main + M_fuel_sec + M_air_sec) # initial mass should be 100 
