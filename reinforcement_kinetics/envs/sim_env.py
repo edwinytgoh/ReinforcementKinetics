@@ -3,7 +3,7 @@ import cantera as ct
 import numpy as np
 from gym import spaces
 from gym.utils import EzPickle
-from envs.SimUtils import solvePhi_airSplit, equil, runMainBurner, correctNOx
+from reinforcement_kinetics.utils.sim_utils import solvePhi_airSplit, equil, runMainBurner, correctNOx
 
 milliseconds = 1e-3
 DT = 0.001*milliseconds  # this is the time step used in the simulation
